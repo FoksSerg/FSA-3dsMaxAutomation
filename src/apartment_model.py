@@ -66,6 +66,7 @@ class Room:
     length: float  # Длина комнаты (метры)
     height: float = 2.7  # Высота потолка (метры)
     room_type: str = "living"  # Тип комнаты (living, bedroom, kitchen, bathroom)
+    wall_thickness: float = 0.2  # Толщина стен комнаты (метры)
     windows: List[Opening] = field(default_factory=list)
     doors: List[Opening] = field(default_factory=list)
     materials: dict = field(default_factory=dict)  # Материалы для стен, пола, потолка
@@ -96,9 +97,10 @@ class Room:
 class ApartmentModel:
     """Модель квартиры - основной класс для хранения всех данных"""
     
-    def __init__(self, name: str = "Новая квартира", ceiling_height: float = 2.7):
+    def __init__(self, name: str = "Новая квартира", ceiling_height: float = 2.7, default_wall_thickness: float = 0.2):
         self.name = name
         self.ceiling_height = ceiling_height
+        self.default_wall_thickness = default_wall_thickness  # Толщина стен по умолчанию (метры)
         self.rooms: List[Room] = []
         self.walls: List[Wall] = []
         self.metadata = {
@@ -129,6 +131,7 @@ class ApartmentModel:
         return {
             "name": self.name,
             "ceiling_height": self.ceiling_height,
+            "default_wall_thickness": self.default_wall_thickness,
             "rooms": [
                 {
                     "name": room.name,
@@ -138,6 +141,7 @@ class ApartmentModel:
                     "length": room.length,
                     "height": room.height,
                     "room_type": room.room_type,
+                    "wall_thickness": room.wall_thickness,
                     "windows": [
                         {
                             "type": w.opening_type.value,
@@ -185,8 +189,11 @@ class ApartmentModel:
     @classmethod
     def from_dict(cls, data: dict) -> 'ApartmentModel':
         """Создать модель из словаря"""
-        apartment = cls(data.get("name", "Новая квартира"), 
-                       data.get("ceiling_height", 2.7))
+        apartment = cls(
+            name=data.get("name", "Новая квартира"), 
+            ceiling_height=data.get("ceiling_height", 2.7),
+            default_wall_thickness=data.get("default_wall_thickness", 0.2)
+        )
         
         # Загружаем комнаты
         for room_data in data.get("rooms", []):
@@ -198,6 +205,7 @@ class ApartmentModel:
                 length=room_data["length"],
                 height=room_data.get("height", 2.7),
                 room_type=room_data.get("room_type", "living"),
+                wall_thickness=room_data.get("wall_thickness", 0.2),
                 materials=room_data.get("materials", {})
             )
             

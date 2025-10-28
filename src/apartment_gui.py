@@ -31,8 +31,11 @@ class ApartmentGUI:
     def __init__(self, root):
         self.root = root
         self.root.title(FULL_TITLE)
-        self.root.geometry("1200x700")
         self.root.minsize(900, 600)
+        
+        # Открываем окно поверх других на 2 секунды
+        self.root.attributes('-topmost', True)
+        self.root.after(2000, lambda: self.root.attributes('-topmost', False))
         
         # Модель квартиры
         self.apartment = ApartmentModel()
@@ -60,6 +63,11 @@ class ApartmentGUI:
         self.auto_save_enabled = True
         self.last_auto_save = None
         
+        # История для Undo/Redo
+        self.undo_stack = []  # Стек для отмены
+        self.redo_stack = []  # Стек для возврата
+        self.max_undo_steps = 50  # Максимум шагов отмены
+        
         # Создание интерфейса
         self.create_widgets()
         
@@ -68,6 +76,11 @@ class ApartmentGUI:
         
         # Привязка событий
         self.root.protocol('WM_DELETE_WINDOW', self.on_closing)
+        
+        # Привязываем горячие клавиши для Undo/Redo
+        self.root.bind('<Control-z>', lambda e: self.undo())
+        self.root.bind('<Control-y>', lambda e: self.redo())
+        self.root.bind('<Control-Shift-Z>', lambda e: self.redo())
         
         # Попытка загрузить последнее автосохранение при запуске
         self.load_last_autosave()
@@ -97,6 +110,14 @@ class ApartmentGUI:
         menubar.add_cascade(label="Экспорт", menu=export_menu)
         export_menu.add_command(label="Генерировать MAXScript", command=self.generate_maxscript)
         export_menu.add_command(label="Сохранить в MAX файл", command=self.export_to_max)
+        
+        # Меню Правка
+        edit_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Правка", menu=edit_menu)
+        edit_menu.add_command(label="Отменить (Ctrl+Z)", command=self.undo, accelerator="Ctrl+Z")
+        edit_menu.add_command(label="Вернуть (Ctrl+Y)", command=self.redo, accelerator="Ctrl+Y")
+        edit_menu.add_separator()
+        edit_menu.add_command(label="Очистить историю", command=self.clear_history)
         
         # Меню Автосохранение
         autosave_menu = tk.Menu(menubar, tearoff=0)
@@ -146,9 +167,14 @@ class ApartmentGUI:
         self.ceiling_height_var = tk.DoubleVar(value=2.7)
         ttk.Entry(main_frame, textvariable=self.ceiling_height_var, width=20).grid(row=1, column=1, sticky=tk.W, padx=10)
         
+        # Толщина стен по умолчанию
+        ttk.Label(main_frame, text="Толщина стен по умолчанию (м):").grid(row=2, column=0, sticky=tk.W, pady=10)
+        self.wall_thickness_var = tk.DoubleVar(value=0.2)
+        ttk.Entry(main_frame, textvariable=self.wall_thickness_var, width=20).grid(row=2, column=1, sticky=tk.W, padx=10)
+        
         # Информация о квартире
         info_frame = ttk.LabelFrame(main_frame, text="Информация о квартире", padding="15")
-        info_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=20, padx=10)
+        info_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=20, padx=10)
         
         ttk.Label(info_frame, text="Общая площадь:").grid(row=0, column=0, sticky=tk.W)
         self.total_area_label = ttk.Label(info_frame, text="0.00 кв.м", font=("Arial", 10, "bold"))
@@ -283,7 +309,7 @@ class ApartmentGUI:
         """Диалог добавления новой комнаты"""
         dialog = tk.Toplevel(self.root)
         dialog.title("Добавить комнату")
-        dialog.geometry("400x400")
+        dialog.geometry("400x450")
         dialog.transient(self.root)
         dialog.grab_set()
         
@@ -326,6 +352,11 @@ class ApartmentGUI:
         y_entry.insert(0, "0")
         y_entry.grid(row=5, column=1, padx=10, pady=10)
         
+        ttk.Label(dialog, text="Толщина стен (м):").grid(row=6, column=0, sticky=tk.W, padx=10, pady=10)
+        wall_thickness_entry = ttk.Entry(dialog, width=30)
+        wall_thickness_entry.insert(0, str(self.wall_thickness_var.get()))
+        wall_thickness_entry.grid(row=6, column=1, padx=10, pady=10)
+        
         def add_room():
             try:
                 room = Room(
@@ -335,7 +366,8 @@ class ApartmentGUI:
                     width=float(width_entry.get()),
                     length=float(length_entry.get()),
                     room_type=room_types_ru.get(type_var.get(), "living"),
-                    height=self.ceiling_height_var.get()
+                    height=self.ceiling_height_var.get(),
+                    wall_thickness=float(wall_thickness_entry.get())
                 )
                 self.apartment.add_room(room)
                 self.refresh_rooms_list()
@@ -560,15 +592,55 @@ class ApartmentGUI:
             x2 = (room.x + room.length - self._min_x) * 100 + margin
             y2 = (room.y + room.width - self._min_y) * 100 + margin
             
-            # Цвет комнаты
+            # Толщина стен в пикселях
+            wall_px = room.wall_thickness * 100
+            
+            # Цвет комнаты (внутреннее пространство)
             color = room_colors.get(room.room_type, "#FFFFFF")
             
-            # Определяем ширину контура в зависимости от того, перетаскивается ли эта комната
-            outline_width = 4 if (self.dragging_room and self.dragging_room_idx == idx) else 2
-            outline_color = "red" if (self.dragging_room and self.dragging_room_idx == idx) else "black"
+            # Рисуем стены (4 прямоугольника по периметру)
+            wall_color = "#808080"  # Серый цвет для стен
             
-            # Рисуем прямоугольник комнаты с тегом для события
-            rect_id = self.preview_canvas.create_rectangle(x1, y1, x2, y2, 
+            # Нижняя стена
+            self.preview_canvas.create_rectangle(
+                x1, y1, x2, y1 + wall_px,
+                fill=wall_color, outline="black", width=1,
+                tags=f"room_{idx}"
+            )
+            
+            # Верхняя стена
+            self.preview_canvas.create_rectangle(
+                x1, y2 - wall_px, x2, y2,
+                fill=wall_color, outline="black", width=1,
+                tags=f"room_{idx}"
+            )
+            
+            # Левая стена
+            self.preview_canvas.create_rectangle(
+                x1, y1, x1 + wall_px, y2,
+                fill=wall_color, outline="black", width=1,
+                tags=f"room_{idx}"
+            )
+            
+            # Правая стена
+            self.preview_canvas.create_rectangle(
+                x2 - wall_px, y1, x2, y2,
+                fill=wall_color, outline="black", width=1,
+                tags=f"room_{idx}"
+            )
+            
+            # Рисуем внутреннее пространство комнаты (без стен)
+            inner_x1 = x1 + wall_px
+            inner_y1 = y1 + wall_px
+            inner_x2 = x2 - wall_px
+            inner_y2 = y2 - wall_px
+            
+            # Определяем ширину контура в зависимости от того, перетаскивается ли эта комната
+            outline_width = 3 if (self.dragging_room and self.dragging_room_idx == idx) else 1
+            outline_color = "red" if (self.dragging_room and self.dragging_room_idx == idx) else "darkgray"
+            
+            # Рисуем прямоугольник внутреннего пространства комнаты с тегом для события
+            rect_id = self.preview_canvas.create_rectangle(inner_x1, inner_y1, inner_x2, inner_y2, 
                                                 fill=color, outline=outline_color, width=outline_width,
                                                 tags=f"room_{idx}")
             
@@ -748,6 +820,9 @@ class ApartmentGUI:
         desired_x = self._min_x + (new_center_x - self.dragging_room.length * 100 / 2 - margin) / 100
         desired_y = self._min_y + (new_center_y - self.dragging_room.width * 100 / 2 - margin) / 100
         
+        # Проверяем, зажата ли клавиша Shift для свободного перемещения
+        shift_pressed = (event.state & 0x1) != 0
+        
         # Применяем ограничения скользящей коллизии
         # ВАЖНО: используем текущую позицию двойника, а не начальную!
         current_x = self.ghost_x if hasattr(self, 'ghost_x') and self.ghost_x != 0 else self.dragging_room.x
@@ -756,7 +831,7 @@ class ApartmentGUI:
         constrained_x, constrained_y = self.constrain_movement(
             self.dragging_room, desired_x, desired_y, 
             current_x, current_y, 
-            self.dragging_room_idx, False
+            self.dragging_room_idx, shift_pressed
         )
         
         # Сохраняем позицию двойника (ограниченную)
@@ -826,6 +901,9 @@ class ApartmentGUI:
     def on_room_release(self, event):
         """Обработчик отпускания комнаты"""
         if self.dragging_room:
+            # Сохраняем состояние для Undo ПЕРЕД изменением
+            self.save_state()
+            
             # ИСПОЛЬЗУЕМ КООРДИНАТЫ ДВОЙНИКА (не пересчитываем!)
             new_x = self.ghost_x
             new_y = self.ghost_y
@@ -900,9 +978,13 @@ class ApartmentGUI:
             if os.path.exists(settings_file):
                 with open(settings_file, 'r', encoding='utf-8') as f:
                     settings = json.load(f)
-                    self.root.geometry(settings.get('geometry', '1200x700'))
+                    geometry = settings.get('geometry', '1200x700')
+                    self.root.geometry(geometry)
+            else:
+                # Если файла нет - используем размеры по умолчанию
+                self.root.geometry('1200x700')
         except Exception:
-            pass
+            self.root.geometry('1200x700')
     
     def on_closing(self):
         """Обработка закрытия окна"""
@@ -910,16 +992,19 @@ class ApartmentGUI:
         self.root.destroy()
     
     def save_window_settings(self):
-        """Сохранение настроек окна"""
+        """Сохранение настроек окна (размер и положение)"""
         try:
             settings_file = "window_settings.json"
+            # Получаем текущую геометрию окна (ширина x высота + X + Y)
+            geometry = self.root.geometry()
             settings = {
-                'geometry': self.root.geometry()
+                'geometry': geometry,
+                'last_saved': json.dumps({"timestamp": "now"})
             }
             with open(settings_file, 'w', encoding='utf-8') as f:
-                json.dump(settings, f)
-        except Exception:
-            pass
+                json.dump(settings, f, indent=2)
+        except Exception as e:
+            print(f"Ошибка сохранения настроек окна: {e}")
     
     def new_project(self):
         """Создание нового проекта"""
@@ -1147,6 +1232,71 @@ class ApartmentGUI:
             
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось очистить автосохранения: {e}")
+    
+    def save_state(self):
+        """Сохранение текущего состояния для Undo"""
+        # Создаём копию состояния квартиры
+        state = self.apartment.to_dict()
+        self.undo_stack.append(state)
+        
+        # Очищаем redo стек (после нового действия нельзя вернуть)
+        self.redo_stack.clear()
+        
+        # Ограничиваем размер стека
+        if len(self.undo_stack) > self.max_undo_steps:
+            self.undo_stack.pop(0)
+    
+    def undo(self):
+        """Отмена последнего действия (Ctrl+Z)"""
+        if not self.undo_stack:
+            messagebox.showinfo("Отмена", "Нет действий для отмены")
+            return
+        
+        # Сохраняем текущее состояние в redo стек
+        current_state = self.apartment.to_dict()
+        self.redo_stack.append(current_state)
+        
+        # Восстанавливаем предыдущее состояние
+        previous_state = self.undo_stack.pop()
+        self.apartment = ApartmentModel.from_dict(previous_state)
+        
+        # Обновляем интерфейс
+        self.project_name_var.set(self.apartment.name)
+        self.ceiling_height_var.set(self.apartment.ceiling_height)
+        self.refresh_rooms_list()
+        self.refresh_walls_list()
+        self.update_info()
+        self.update_preview()
+    
+    def redo(self):
+        """Возврат отменённого действия (Ctrl+Y)"""
+        if not self.redo_stack:
+            messagebox.showinfo("Возврат", "Нет действий для возврата")
+            return
+        
+        # Сохраняем текущее состояние в undo стек
+        current_state = self.apartment.to_dict()
+        self.undo_stack.append(current_state)
+        
+        # Восстанавливаем следующее состояние
+        next_state = self.redo_stack.pop()
+        self.apartment = ApartmentModel.from_dict(next_state)
+        
+        # Обновляем интерфейс
+        self.project_name_var.set(self.apartment.name)
+        self.ceiling_height_var.set(self.apartment.ceiling_height)
+        self.refresh_rooms_list()
+        self.refresh_walls_list()
+        self.update_info()
+        self.update_preview()
+    
+    def clear_history(self):
+        """Очистка истории Undo/Redo"""
+        if messagebox.askyesno("Очистка истории", 
+                               "Очистить всю историю изменений?\nЭто действие нельзя отменить."):
+            self.undo_stack.clear()
+            self.redo_stack.clear()
+            messagebox.showinfo("Успех", "История изменений очищена")
 
 
 def main():
