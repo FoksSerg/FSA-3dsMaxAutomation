@@ -325,8 +325,21 @@ class ApartmentGUI:
         dialog = tk.Toplevel(self.root)
         dialog.title("Добавить комнату")
         dialog.geometry("400x450")
-        dialog.transient(self.root)
-        dialog.grab_set()
+        
+        # Делаем окно модальным и всплывающим
+        dialog.transient(self.root)  # Окно привязано к родителю
+        dialog.grab_set()  # Модальность - блокирует родительское окно
+        dialog.focus_set()  # Передаём фокус на диалог
+        
+        # Центрируем окно относительно родителя
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (400 // 2)
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (450 // 2)
+        dialog.geometry(f"400x450+{x}+{y}")
+        
+        # Делаем окно поверх других
+        dialog.attributes('-topmost', True)
+        dialog.after(100, lambda: dialog.attributes('-topmost', False))
         
         # Словарь для русификации типов комнат
         room_types_ru = {
@@ -376,17 +389,19 @@ class ApartmentGUI:
             try:
                 room = Room(
                     name=name_entry.get(),
-                    x=float(x_entry.get()),
-                    y=float(y_entry.get()),
-                    width=float(width_entry.get()),
-                    length=float(length_entry.get()),
+                    x=round(float(x_entry.get()), 2),  # Округление до 1 см
+                    y=round(float(y_entry.get()), 2),  # Округление до 1 см
+                    width=round(float(width_entry.get()), 2),  # Округление до 1 см
+                    length=round(float(length_entry.get()), 2),  # Округление до 1 см
                     room_type=room_types_ru.get(type_var.get(), "living"),
-                    height=self.ceiling_height_var.get(),
-                    wall_thickness=float(wall_thickness_entry.get())
+                    height=round(self.ceiling_height_var.get(), 2),  # Округление до 1 см
+                    wall_thickness=round(float(wall_thickness_entry.get()), 2)  # Округление до 1 см
                 )
                 self.apartment.add_room(room)
+                self.normalize_coordinates()  # Нормализуем после добавления
                 self.refresh_rooms_list()
                 self.update_info()
+                self.draw_plan_on_canvas()  # Перерисовываем 2D план
                 dialog.destroy()
             except ValueError as e:
                 messagebox.showerror("Ошибка", f"Некорректные данные: {e}")
@@ -429,9 +444,22 @@ class ApartmentGUI:
         """Диалог редактирования комнаты"""
         dialog = tk.Toplevel(self.root)
         dialog.title("Редактировать комнату")
-        dialog.geometry("400x400")
-        dialog.transient(self.root)
-        dialog.grab_set()
+        dialog.geometry("400x450")
+        
+        # Делаем окно модальным и всплывающим
+        dialog.transient(self.root)  # Окно привязано к родителю
+        dialog.grab_set()  # Модальность - блокирует родительское окно
+        dialog.focus_set()  # Передаём фокус на диалог
+        
+        # Центрируем окно относительно родителя
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - (400 // 2)
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - (450 // 2)
+        dialog.geometry(f"400x450+{x}+{y}")
+        
+        # Делаем окно поверх других
+        dialog.attributes('-topmost', True)
+        dialog.after(100, lambda: dialog.attributes('-topmost', False))
         
         # Словарь для русификации типов комнат
         room_types_ru = {
@@ -478,18 +506,20 @@ class ApartmentGUI:
         
         def save_room():
             try:
-                # Обновляем комнату
+                # Обновляем комнату с округлением до 1 см
                 room.name = name_entry.get()
                 room.room_type = room_types_ru.get(type_var.get(), "living")
-                room.width = float(width_entry.get())
-                room.length = float(length_entry.get())
-                room.x = float(x_entry.get())
-                room.y = float(y_entry.get())
+                room.width = round(float(width_entry.get()), 2)
+                room.length = round(float(length_entry.get()), 2)
+                room.x = round(float(x_entry.get()), 2)
+                room.y = round(float(y_entry.get()), 2)
                 
                 self.apartment.rooms[index] = room
                 
+                self.normalize_coordinates()  # Нормализуем после редактирования
                 self.refresh_rooms_list()
                 self.update_info()
+                self.draw_plan_on_canvas()  # Перерисовываем 2D план
                 # Автосохранение после редактирования
                 self.auto_save()
                 dialog.destroy()
@@ -718,6 +748,9 @@ class ApartmentGUI:
         edge_info = self.get_room_edge_at_point(canvas_x, canvas_y)
         
         if edge_info:
+            # СОХРАНЯЕМ СОСТОЯНИЕ ДО начала resize
+            self.save_state()
+            
             # Начинаем изменение размера
             room_idx, edge = edge_info
             self.resizing_room = self.apartment.rooms[room_idx]
@@ -739,6 +772,9 @@ class ApartmentGUI:
                 if tag.startswith("room_"):
                     room_idx = int(tag.split("_")[1])
                     if 0 <= room_idx < len(self.apartment.rooms):
+                        # СОХРАНЯЕМ СОСТОЯНИЕ ДО начала drag
+                        self.save_state()
+                        
                         room = self.apartment.rooms[room_idx]
                         self.dragging_room_idx = room_idx
                         self.dragging_room = room
@@ -843,7 +879,7 @@ class ApartmentGUI:
     
     
     def normalize_coordinates(self):
-        """Пересчет координат для устранения отрицательных значений"""
+        """Пересчет координат - всегда приводим к началу (0,0)"""
         if not self.apartment.rooms:
             return
         
@@ -851,15 +887,18 @@ class ApartmentGUI:
         min_x = min(room.x for room in self.apartment.rooms)
         min_y = min(room.y for room in self.apartment.rooms)
         
-        # Если есть отрицательные, смещаем все объекты
-        if min_x < 0 or min_y < 0:
-            offset_x = max(0, -min_x)
-            offset_y = max(0, -min_y)
+        # ВСЕГДА смещаем к началу координат (0,0)
+        # Левый нижний угол всегда в точке (0,0)
+        if min_x != 0 or min_y != 0:
+            offset_x = -min_x
+            offset_y = -min_y
             
-            # Смещаем все комнаты
+            # Смещаем все комнаты и округляем до 1 см
             for room in self.apartment.rooms:
-                room.x += offset_x
-                room.y += offset_y
+                room.x = round(room.x + offset_x, 2)
+                room.y = round(room.y + offset_y, 2)
+                room.length = round(room.length, 2)
+                room.width = round(room.width, 2)
     
     def auto_remove_adjacent_walls(self):
         """Автоматическое удаление смежных стен между комнатами"""
@@ -1062,23 +1101,25 @@ class ApartmentGUI:
         
         min_size = 0.5  # Минимальный размер комнаты 0.5м
         
-        # В зависимости от края изменяем размеры
+        # В зависимости от края изменяем размеры с округлением до 1 см
         if self.resize_edge == "right":
             new_length = max(min_size, self.drag_start_length + delta_x_m)
-            self.resizing_room.length = new_length
+            self.resizing_room.length = round(new_length, 2)  # Округление до 1 см
         elif self.resize_edge == "left":
             new_length = max(min_size, self.drag_start_length - delta_x_m)
+            new_length = round(new_length, 2)  # Округление до 1 см
             delta_actual = self.drag_start_length - new_length
             self.resizing_room.length = new_length
-            self.resizing_room.x = self.drag_start_x + delta_actual
+            self.resizing_room.x = round(self.drag_start_x + delta_actual, 2)  # Округление до 1 см
         elif self.resize_edge == "bottom":
             new_width = max(min_size, self.drag_start_width + delta_y_m)
-            self.resizing_room.width = new_width
+            self.resizing_room.width = round(new_width, 2)  # Округление до 1 см
         elif self.resize_edge == "top":
             new_width = max(min_size, self.drag_start_width - delta_y_m)
+            new_width = round(new_width, 2)  # Округление до 1 см
             delta_actual = self.drag_start_width - new_width
             self.resizing_room.width = new_width
-            self.resizing_room.y = self.drag_start_y + delta_actual
+            self.resizing_room.y = round(self.drag_start_y + delta_actual, 2)  # Округление до 1 см
         
         # Перерисовываем план
         self.draw_plan_on_canvas()
@@ -1087,9 +1128,6 @@ class ApartmentGUI:
         """Обработчик отпускания комнаты"""
         # Режим изменения размера
         if self.resizing_room:
-            # Сохраняем состояние для Undo
-            self.save_state()
-            
             # Нормализуем координаты
             self.normalize_coordinates()
             
@@ -1115,9 +1153,6 @@ class ApartmentGUI:
         
         # Режим перемещения
         if self.dragging_room:
-            # Сохраняем состояние для Undo ПЕРЕД изменением
-            self.save_state()
-            
             # ИСПОЛЬЗУЕМ КООРДИНАТЫ ДВОЙНИКА
             new_x = self.ghost_x
             new_y = self.ghost_y
@@ -1527,8 +1562,9 @@ class ApartmentGUI:
     
     def save_state(self):
         """Сохранение текущего состояния для Undo"""
-        # Создаём копию состояния квартиры
-        state = self.apartment.to_dict()
+        # Создаём ГЛУБОКУЮ копию состояния квартиры
+        import copy
+        state = copy.deepcopy(self.apartment.to_dict())
         self.undo_stack.append(state)
         
         # Очищаем redo стек (после нового действия нельзя вернуть)
@@ -1540,12 +1576,13 @@ class ApartmentGUI:
     
     def undo(self):
         """Отмена последнего действия (Ctrl+Z)"""
-        if not self.undo_stack:
+        if len(self.undo_stack) < 1:
             messagebox.showinfo("Отмена", "Нет действий для отмены")
             return
         
         # Сохраняем текущее состояние в redo стек
-        current_state = self.apartment.to_dict()
+        import copy
+        current_state = copy.deepcopy(self.apartment.to_dict())
         self.redo_stack.append(current_state)
         
         # Восстанавливаем предыдущее состояние
@@ -1555,10 +1592,11 @@ class ApartmentGUI:
         # Обновляем интерфейс
         self.project_name_var.set(self.apartment.name)
         self.ceiling_height_var.set(self.apartment.ceiling_height)
+        self.wall_thickness_var.set(self.apartment.default_wall_thickness)
         self.refresh_rooms_list()
-        self.refresh_walls_list()
         self.update_info()
         self.update_preview()
+        self.draw_plan_on_canvas()  # Перерисовываем 2D план!
     
     def redo(self):
         """Возврат отменённого действия (Ctrl+Y)"""
@@ -1577,9 +1615,10 @@ class ApartmentGUI:
         # Обновляем интерфейс
         self.project_name_var.set(self.apartment.name)
         self.ceiling_height_var.set(self.apartment.ceiling_height)
+        self.wall_thickness_var.set(self.apartment.default_wall_thickness)
         self.refresh_rooms_list()
-        self.refresh_walls_list()
         self.update_info()
+        self.draw_plan_on_canvas()  # Перерисовываем 2D план!
         self.update_preview()
     
     def clear_history(self):
