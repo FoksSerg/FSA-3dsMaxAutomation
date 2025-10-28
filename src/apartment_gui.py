@@ -57,6 +57,14 @@ class ApartmentGUI:
         self.ghost_x = 0  # Текущая позиция двойника
         self.ghost_y = 0
         
+        # Для изменения размеров комнат
+        self.resizing_room = None
+        self.resizing_room_idx = -1
+        self.resize_edge = None  # "left", "right", "top", "bottom"
+        self.resize_start_pos = None
+        self.drag_start_length = 0
+        self.drag_start_width = 0
+        
         # Автосохранение
         self.auto_save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "autosave")
         os.makedirs(self.auto_save_dir, exist_ok=True)
@@ -278,6 +286,13 @@ class ApartmentGUI:
         self.preview_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        # Привязываем события мыши к Canvas
+        self.preview_canvas.bind("<Button-1>", self.on_room_press)
+        self.preview_canvas.bind("<B1-Motion>", self.on_room_drag)
+        self.preview_canvas.bind("<ButtonRelease-1>", self.on_room_release)
+        self.preview_canvas.bind("<Double-Button-1>", self.on_room_double_click)
+        self.preview_canvas.bind("<Motion>", self.on_canvas_motion)
         
         paned.add(preview_left, weight=3)
         
@@ -551,6 +566,9 @@ class ApartmentGUI:
         if not hasattr(self, 'preview_canvas'):
             return
         
+        # Автоматически убираем смежные стены
+        self.auto_remove_adjacent_walls()
+        
         # Очистка Canvas
         self.preview_canvas.delete("all")
         self.room_canvas_items = {}
@@ -598,42 +616,47 @@ class ApartmentGUI:
             # Цвет комнаты (внутреннее пространство)
             color = room_colors.get(room.room_type, "#FFFFFF")
             
-            # Рисуем стены (4 прямоугольника по периметру)
+            # Рисуем стены (4 прямоугольника по периметру) - только видимые
             wall_color = "#808080"  # Серый цвет для стен
             
             # Нижняя стена
-            self.preview_canvas.create_rectangle(
-                x1, y1, x2, y1 + wall_px,
-                fill=wall_color, outline="black", width=1,
-                tags=f"room_{idx}"
-            )
+            if room.walls_visible.get("bottom", True):
+                self.preview_canvas.create_rectangle(
+                    x1, y1, x2, y1 + wall_px,
+                    fill=wall_color, outline="black", width=1,
+                    tags=f"room_{idx}"
+                )
             
             # Верхняя стена
-            self.preview_canvas.create_rectangle(
-                x1, y2 - wall_px, x2, y2,
-                fill=wall_color, outline="black", width=1,
-                tags=f"room_{idx}"
-            )
+            if room.walls_visible.get("top", True):
+                self.preview_canvas.create_rectangle(
+                    x1, y2 - wall_px, x2, y2,
+                    fill=wall_color, outline="black", width=1,
+                    tags=f"room_{idx}"
+                )
             
             # Левая стена
-            self.preview_canvas.create_rectangle(
-                x1, y1, x1 + wall_px, y2,
-                fill=wall_color, outline="black", width=1,
-                tags=f"room_{idx}"
-            )
+            if room.walls_visible.get("left", True):
+                self.preview_canvas.create_rectangle(
+                    x1, y1, x1 + wall_px, y2,
+                    fill=wall_color, outline="black", width=1,
+                    tags=f"room_{idx}"
+                )
             
             # Правая стена
-            self.preview_canvas.create_rectangle(
-                x2 - wall_px, y1, x2, y2,
-                fill=wall_color, outline="black", width=1,
-                tags=f"room_{idx}"
-            )
+            if room.walls_visible.get("right", True):
+                self.preview_canvas.create_rectangle(
+                    x2 - wall_px, y1, x2, y2,
+                    fill=wall_color, outline="black", width=1,
+                    tags=f"room_{idx}"
+                )
             
             # Рисуем внутреннее пространство комнаты (без стен)
-            inner_x1 = x1 + wall_px
-            inner_y1 = y1 + wall_px
-            inner_x2 = x2 - wall_px
-            inner_y2 = y2 - wall_px
+            # Если стена убрана, расширяем пространство до края
+            inner_x1 = x1 if not room.walls_visible.get("left", True) else x1 + wall_px
+            inner_y1 = y1 if not room.walls_visible.get("bottom", True) else y1 + wall_px
+            inner_x2 = x2 if not room.walls_visible.get("right", True) else x2 - wall_px
+            inner_y2 = y2 if not room.walls_visible.get("top", True) else y2 - wall_px
             
             # Определяем ширину контура в зависимости от того, перетаскивается ли эта комната
             outline_width = 3 if (self.dragging_room and self.dragging_room_idx == idx) else 1
@@ -670,11 +693,7 @@ class ApartmentGUI:
                                            fill="black",
                                            tags=f"room_{idx}")
             
-            # Привязка событий к прямоугольнику
-            self.preview_canvas.tag_bind(f"room_{idx}", "<Button-1>", 
-                                        lambda e, r=room: self.on_room_press(e, r))
-            self.preview_canvas.tag_bind(f"room_{idx}", "<B1-Motion>", self.on_room_drag)
-            self.preview_canvas.tag_bind(f"room_{idx}", "<ButtonRelease-1>", self.on_room_release)
+            # События обрабатываются глобальной привязкой к canvas (см. create_preview_tab)
         
         # Рисуем оси координат
         self.preview_canvas.create_line(20, margin, 20, height - margin, 
@@ -690,39 +709,53 @@ class ApartmentGUI:
         self.preview_canvas.create_text(width - 120, 20, text="💡 Зажмите комнату и перетащите мышью | Shift - разрешить пересечение", 
                                        font=("Arial", 9, "italic"), fill="green")
     
-    def on_room_press(self, event, room):
-        """Обработчик нажатия на комнату"""
-        # Находим индекс комнаты
-        for idx, r in enumerate(self.apartment.rooms):
-            if r == room:
-                self.dragging_room_idx = idx
-                break
-        
-        self.dragging_room = room
-        # Получаем координаты canvas относительно окна
+    def on_room_press(self, event):
+        """Обработчик нажатия на комнату или край комнаты"""
         canvas_x = self.preview_canvas.canvasx(event.x)
         canvas_y = self.preview_canvas.canvasy(event.y)
         
-        # Сохраняем координаты центра комнаты и смещение мыши
-        room_center_x = ((room.x - self._min_x) * 100 + 50) + (room.length * 100 / 2)
-        room_center_y = ((room.y - self._min_y) * 100 + 50) + (room.width * 100 / 2)
+        # Сначала проверяем, нажали ли на край комнаты (для resize)
+        edge_info = self.get_room_edge_at_point(canvas_x, canvas_y)
         
-        self.drag_offset_x = canvas_x - room_center_x
-        self.drag_offset_y = canvas_y - room_center_y
+        if edge_info:
+            # Начинаем изменение размера
+            room_idx, edge = edge_info
+            self.resizing_room = self.apartment.rooms[room_idx]
+            self.resizing_room_idx = room_idx
+            self.resize_edge = edge
+            self.resize_start_pos = (canvas_x, canvas_y)
+            self.drag_start_x = self.resizing_room.x
+            self.drag_start_y = self.resizing_room.y
+            self.drag_start_length = self.resizing_room.length
+            self.drag_start_width = self.resizing_room.width
+            return
         
-        self.drag_start_x = room.x
-        self.drag_start_y = room.y
+        # Если не на краю, то проверяем клик на комнату (для перемещения)
+        overlapping = self.preview_canvas.find_overlapping(canvas_x, canvas_y, canvas_x, canvas_y)
         
-        # Сохраняем теги элементов комнаты для перемещения
-        self.dragging_tags = [tag for tag in self.room_canvas_items if self.room_canvas_items[tag] == room]
-        
-        # Изменяем курсор при наведении на комнату
-        self.preview_canvas.config(cursor="hand2")
-        
-        # Выделяем комнату изменением контура
-        if f"room_{self.dragging_room_idx}" in self.room_rectangles:
-            rect_id = self.room_rectangles[f"room_{self.dragging_room_idx}"]
-            self.preview_canvas.itemconfig(rect_id, outline="red", width=4)
+        for item in overlapping:
+            tags = self.preview_canvas.gettags(item)
+            for tag in tags:
+                if tag.startswith("room_"):
+                    room_idx = int(tag.split("_")[1])
+                    if 0 <= room_idx < len(self.apartment.rooms):
+                        room = self.apartment.rooms[room_idx]
+                        self.dragging_room_idx = room_idx
+                        self.dragging_room = room
+                        
+                        # Сохраняем координаты центра комнаты и смещение мыши
+                        room_center_x = ((room.x - self._min_x) * 100 + 50) + (room.length * 100 / 2)
+                        room_center_y = ((room.y - self._min_y) * 100 + 50) + (room.width * 100 / 2)
+                        
+                        self.drag_offset_x = canvas_x - room_center_x
+                        self.drag_offset_y = canvas_y - room_center_y
+                        
+                        self.drag_start_x = room.x
+                        self.drag_start_y = room.y
+                        
+                        # Изменяем курсор
+                        self.preview_canvas.config(cursor="hand2")
+                        return
     
     def has_intersection(self, room, x, y, exclude_index=-1):
         """Проверка есть ли пересечение комнаты с другими (строгое наложение, не касание)"""
@@ -730,6 +763,8 @@ class ApartmentGUI:
         new_right = x + room.length
         new_top = y + room.width
         new_bottom = y
+        
+        tolerance = 0.05  # Допуск 5см для касания
         
         for idx, other_room in enumerate(self.apartment.rooms):
             if idx == exclude_index:
@@ -740,47 +775,71 @@ class ApartmentGUI:
             other_top = other_room.y + other_room.width
             other_bottom = other_room.y
             
-            # Проверяем строгое пересечение (наложение, не касание): >
-            if (new_right > other_left and new_left < other_right and 
-                new_top > other_bottom and new_bottom < other_top):
+            # Проверяем строгое пересечение с допуском на касание
+            if (new_right > other_left + tolerance and new_left < other_right - tolerance and 
+                new_top > other_bottom + tolerance and new_bottom < other_top - tolerance):
                 return True
         
         return False
     
-    def constrain_movement(self, room, new_x, new_y, old_x, old_y, exclude_index=-1, shift_pressed=False):
+    def snap_to_adjacent_rooms(self, room, x, y, exclude_index=-1):
         """
-        Алгоритм скользящей коллизии - ограничиваем движение по осям отдельно
-        
-        Логика:
-        1. Если нет пересечения - разрешаем полное движение
-        2. Если есть пересечение - разделяем движение по осям:
-           - Сначала пробуем двигаться только по X
-           - Потом пробуем двигаться только по Y
-           Это позволяет комнате "скользить" вдоль стен
-        3. При касании не блокируем (строгое пересечение >)
+        Точная привязка к соседним комнатам при отпускании
+        Использует геометрию для идеального соприкосновения стен
         """
-        if shift_pressed:
-            return new_x, new_y
+        snap_distance = 0.2  # Дистанция привязки (20см)
+        snapped_x = x
+        snapped_y = y
         
-        # Если нет пересечения - разрешаем движение
-        if not self.has_intersection(room, new_x, new_y, exclude_index):
-            return new_x, new_y
+        min_distance_x = float('inf')
+        min_distance_y = float('inf')
+        best_x = x
+        best_y = y
         
-        # Есть пересечение - разделяем движение по осям
-        limited_x = old_x
-        limited_y = old_y
+        for idx, other_room in enumerate(self.apartment.rooms):
+            if idx == exclude_index:
+                continue
+            
+            # Привязка по X (правая стена к левой стене соседа)
+            distance_right_left = abs((x + room.length) - other_room.x)
+            if distance_right_left < snap_distance:
+                # Проверяем есть ли перекрытие по Y
+                if not (y + room.width <= other_room.y or other_room.y + other_room.width <= y):
+                    if distance_right_left < min_distance_x:
+                        min_distance_x = distance_right_left
+                        best_x = other_room.x - room.length
+            
+            # Привязка по X (левая стена к правой стене соседа)
+            distance_left_right = abs(x - (other_room.x + other_room.length))
+            if distance_left_right < snap_distance:
+                if not (y + room.width <= other_room.y or other_room.y + other_room.width <= y):
+                    if distance_left_right < min_distance_x:
+                        min_distance_x = distance_left_right
+                        best_x = other_room.x + other_room.length
+            
+            # Привязка по Y (верхняя стена к нижней стене соседа)
+            distance_top_bottom = abs((y + room.width) - other_room.y)
+            if distance_top_bottom < snap_distance:
+                if not (x + room.length <= other_room.x or other_room.x + other_room.length <= x):
+                    if distance_top_bottom < min_distance_y:
+                        min_distance_y = distance_top_bottom
+                        best_y = other_room.y - room.width
+            
+            # Привязка по Y (нижняя стена к верхней стене соседа)
+            distance_bottom_top = abs(y - (other_room.y + other_room.width))
+            if distance_bottom_top < snap_distance:
+                if not (x + room.length <= other_room.x or other_room.x + other_room.length <= x):
+                    if distance_bottom_top < min_distance_y:
+                        min_distance_y = distance_bottom_top
+                        best_y = other_room.y + other_room.width
         
-        # Пробуем двигаться только по X
-        if abs(new_x - old_x) > 0.001:  # Есть движение по X
-            if not self.has_intersection(room, new_x, old_y, exclude_index):
-                limited_x = new_x
+        # Применяем лучшую привязку
+        if min_distance_x < snap_distance:
+            snapped_x = best_x
+        if min_distance_y < snap_distance:
+            snapped_y = best_y
         
-        # Пробуем двигаться только по Y
-        if abs(new_y - old_y) > 0.001:  # Есть движение по Y
-            if not self.has_intersection(room, limited_x, new_y, exclude_index):
-                limited_y = new_y
-        
-        return limited_x, limited_y
+        return snapped_x, snapped_y
     
     
     def normalize_coordinates(self):
@@ -802,8 +861,86 @@ class ApartmentGUI:
                 room.x += offset_x
                 room.y += offset_y
     
+    def auto_remove_adjacent_walls(self):
+        """Автоматическое удаление смежных стен между комнатами"""
+        if len(self.apartment.rooms) < 2:
+            return
+        
+        # Сначала восстанавливаем все стены
+        for room in self.apartment.rooms:
+            room.walls_visible = {
+                "top": True, "bottom": True, "left": True, "right": True
+            }
+        
+        tolerance = 0.01  # Допуск для сравнения координат
+        min_overlap_percent = 0.9  # Минимум 90% перекрытия для удаления стены
+        
+        # Для каждой комнаты проверяем её стены
+        for i, room in enumerate(self.apartment.rooms):
+            # Проверяем правую стену
+            total_right_coverage = 0
+            for other in self.apartment.rooms:
+                if other == room:
+                    continue
+                if abs((room.x + room.length) - other.x) < tolerance:
+                    overlap_start = max(room.y, other.y)
+                    overlap_end = min(room.y + room.width, other.y + other.width)
+                    overlap_length = max(0, overlap_end - overlap_start)
+                    total_right_coverage += overlap_length
+            
+            if total_right_coverage >= room.width * min_overlap_percent:
+                room.walls_visible["right"] = False
+            
+            # Проверяем левую стену
+            total_left_coverage = 0
+            for other in self.apartment.rooms:
+                if other == room:
+                    continue
+                if abs(room.x - (other.x + other.length)) < tolerance:
+                    overlap_start = max(room.y, other.y)
+                    overlap_end = min(room.y + room.width, other.y + other.width)
+                    overlap_length = max(0, overlap_end - overlap_start)
+                    total_left_coverage += overlap_length
+            
+            if total_left_coverage >= room.width * min_overlap_percent:
+                room.walls_visible["left"] = False
+                
+            # Проверяем верхнюю стену
+            total_top_coverage = 0
+            for other in self.apartment.rooms:
+                if other == room:
+                    continue
+                if abs((room.y + room.width) - other.y) < tolerance:
+                    overlap_start = max(room.x, other.x)
+                    overlap_end = min(room.x + room.length, other.x + other.length)
+                    overlap_length = max(0, overlap_end - overlap_start)
+                    total_top_coverage += overlap_length
+            
+            if total_top_coverage >= room.length * min_overlap_percent:
+                room.walls_visible["top"] = False
+            
+            # Проверяем нижнюю стену
+            total_bottom_coverage = 0
+            for other in self.apartment.rooms:
+                if other == room:
+                    continue
+                if abs(room.y - (other.y + other.width)) < tolerance:
+                    overlap_start = max(room.x, other.x)
+                    overlap_end = min(room.x + room.length, other.x + other.length)
+                    overlap_length = max(0, overlap_end - overlap_start)
+                    total_bottom_coverage += overlap_length
+            
+            if total_bottom_coverage >= room.length * min_overlap_percent:
+                room.walls_visible["bottom"] = False
+    
     def on_room_drag(self, event):
-        """Обработчик перетаскивания комнаты"""
+        """Обработчик перетаскивания комнаты или изменения размера"""
+        # Режим изменения размера
+        if self.resizing_room:
+            self.on_room_resize(event)
+            return
+        
+        # Режим перемещения
         if not self.dragging_room:
             return
         
@@ -823,16 +960,32 @@ class ApartmentGUI:
         # Проверяем, зажата ли клавиша Shift для свободного перемещения
         shift_pressed = (event.state & 0x1) != 0
         
-        # Применяем ограничения скользящей коллизии
+        # Применяем ограничения скользящей коллизии для двойника
         # ВАЖНО: используем текущую позицию двойника, а не начальную!
         current_x = self.ghost_x if hasattr(self, 'ghost_x') and self.ghost_x != 0 else self.dragging_room.x
         current_y = self.ghost_y if hasattr(self, 'ghost_y') and self.ghost_y != 0 else self.dragging_room.y
         
-        constrained_x, constrained_y = self.constrain_movement(
-            self.dragging_room, desired_x, desired_y, 
-            current_x, current_y, 
-            self.dragging_room_idx, shift_pressed
-        )
+        if shift_pressed:
+            # Со Shift - свободное движение
+            constrained_x = desired_x
+            constrained_y = desired_y
+        else:
+            # Без Shift - с коллизией (для двойника только предотвращаем наложение)
+            if not self.has_intersection(self.dragging_room, desired_x, desired_y, self.dragging_room_idx):
+                constrained_x = desired_x
+                constrained_y = desired_y
+            else:
+                # Есть пересечение - пробуем двигаться по осям отдельно
+                constrained_x = current_x
+                constrained_y = current_y
+                
+                # Пробуем только по X
+                if not self.has_intersection(self.dragging_room, desired_x, current_y, self.dragging_room_idx):
+                    constrained_x = desired_x
+                
+                # Пробуем только по Y
+                if not self.has_intersection(self.dragging_room, constrained_x, desired_y, self.dragging_room_idx):
+                    constrained_y = desired_y
         
         # Сохраняем позицию двойника (ограниченную)
         self.ghost_x = constrained_x
@@ -898,15 +1051,86 @@ class ApartmentGUI:
         )
         self.ghost_room_items.append(ghost_size)
     
+    def on_room_resize(self, event):
+        """Обработчик изменения размера комнаты"""
+        canvas_x = self.preview_canvas.canvasx(event.x)
+        canvas_y = self.preview_canvas.canvasy(event.y)
+        
+        start_x, start_y = self.resize_start_pos
+        delta_x_m = (canvas_x - start_x) / 100  # Конвертируем в метры
+        delta_y_m = (canvas_y - start_y) / 100
+        
+        min_size = 0.5  # Минимальный размер комнаты 0.5м
+        
+        # В зависимости от края изменяем размеры
+        if self.resize_edge == "right":
+            new_length = max(min_size, self.drag_start_length + delta_x_m)
+            self.resizing_room.length = new_length
+        elif self.resize_edge == "left":
+            new_length = max(min_size, self.drag_start_length - delta_x_m)
+            delta_actual = self.drag_start_length - new_length
+            self.resizing_room.length = new_length
+            self.resizing_room.x = self.drag_start_x + delta_actual
+        elif self.resize_edge == "bottom":
+            new_width = max(min_size, self.drag_start_width + delta_y_m)
+            self.resizing_room.width = new_width
+        elif self.resize_edge == "top":
+            new_width = max(min_size, self.drag_start_width - delta_y_m)
+            delta_actual = self.drag_start_width - new_width
+            self.resizing_room.width = new_width
+            self.resizing_room.y = self.drag_start_y + delta_actual
+        
+        # Перерисовываем план
+        self.draw_plan_on_canvas()
+    
     def on_room_release(self, event):
         """Обработчик отпускания комнаты"""
+        # Режим изменения размера
+        if self.resizing_room:
+            # Сохраняем состояние для Undo
+            self.save_state()
+            
+            # Нормализуем координаты
+            self.normalize_coordinates()
+            
+            # Перерисовываем план
+            self.draw_plan_on_canvas()
+            
+            # Обновляем информацию
+            self.refresh_rooms_list()
+            self.update_info()
+            
+            # Автосохранение
+            self.auto_save()
+            
+            # Восстанавливаем курсор
+            self.preview_canvas.config(cursor="")
+            
+            # Сбрасываем флаг resize
+            self.resizing_room = None
+            self.resizing_room_idx = -1
+            self.resize_edge = None
+            self.resize_start_pos = None
+            return
+        
+        # Режим перемещения
         if self.dragging_room:
             # Сохраняем состояние для Undo ПЕРЕД изменением
             self.save_state()
             
-            # ИСПОЛЬЗУЕМ КООРДИНАТЫ ДВОЙНИКА (не пересчитываем!)
+            # ИСПОЛЬЗУЕМ КООРДИНАТЫ ДВОЙНИКА
             new_x = self.ghost_x
             new_y = self.ghost_y
+            
+            # Проверяем, зажата ли клавиша Shift
+            shift_pressed = (event.state & 0x1) != 0
+            
+            # Применяем магнитную привязку к соседним комнатам (если не Shift)
+            if not shift_pressed:
+                new_x, new_y = self.snap_to_adjacent_rooms(
+                    self.dragging_room, new_x, new_y, 
+                    self.dragging_room_idx
+                )
             
             # Обновляем координаты комнаты
             self.dragging_room.x = round(new_x, 2)
@@ -938,6 +1162,74 @@ class ApartmentGUI:
             self.dragging_room = None
             self.dragging_room_idx = -1
             self.dragging_tags = None
+    
+    def on_room_double_click(self, event):
+        """Обработчик двойного клика - открытие параметров комнаты"""
+        # Находим комнату под курсором
+        canvas_x = self.preview_canvas.canvasx(event.x)
+        canvas_y = self.preview_canvas.canvasy(event.y)
+        
+        overlapping = self.preview_canvas.find_overlapping(canvas_x, canvas_y, canvas_x, canvas_y)
+        
+        for item in overlapping:
+            tags = self.preview_canvas.gettags(item)
+            for tag in tags:
+                if tag.startswith("room_"):
+                    room_idx = int(tag.split("_")[1])
+                    if 0 <= room_idx < len(self.apartment.rooms):
+                        # Открываем диалог редактирования
+                        self.edit_room_dialog(room_idx)
+                        return
+    
+    def on_canvas_motion(self, event):
+        """Обработчик движения мыши - изменение курсора у краёв комнат"""
+        if self.dragging_room or self.resizing_room:
+            return  # Не меняем курсор во время drag/resize
+        
+        canvas_x = self.preview_canvas.canvasx(event.x)
+        canvas_y = self.preview_canvas.canvasy(event.y)
+        
+        # Проверяем, находимся ли мы у края какой-либо комнаты
+        edge_info = self.get_room_edge_at_point(canvas_x, canvas_y)
+        
+        if edge_info:
+            room_idx, edge = edge_info
+            # Устанавливаем курсор в зависимости от края
+            if edge in ["left", "right"]:
+                self.preview_canvas.config(cursor="sb_h_double_arrow")
+            elif edge in ["top", "bottom"]:
+                self.preview_canvas.config(cursor="sb_v_double_arrow")
+        else:
+            self.preview_canvas.config(cursor="")
+    
+    def get_room_edge_at_point(self, canvas_x, canvas_y):
+        """Определяет, находится ли точка у края комнаты"""
+        edge_threshold = 8  # Пикселей от края для захвата
+        
+        margin = 50
+        
+        for idx, room in enumerate(self.apartment.rooms):
+            # Переводим координаты комнаты в пиксели
+            x1 = margin + (room.x - self._min_x) * 100
+            y1 = margin + (room.y - self._min_y) * 100
+            x2 = x1 + room.length * 100
+            y2 = y1 + room.width * 100
+            
+            # Проверяем, находимся ли внутри комнаты по вертикали и у края по горизонтали
+            if y1 <= canvas_y <= y2:
+                if abs(canvas_x - x1) <= edge_threshold:
+                    return (idx, "left")
+                elif abs(canvas_x - x2) <= edge_threshold:
+                    return (idx, "right")
+            
+            # Проверяем, находимся ли внутри комнаты по горизонтали и у края по вертикали
+            if x1 <= canvas_x <= x2:
+                if abs(canvas_y - y1) <= edge_threshold:
+                    return (idx, "top")
+                elif abs(canvas_y - y2) <= edge_threshold:
+                    return (idx, "bottom")
+        
+        return None
     
     def update_preview(self):
         """Обновление предпросмотра"""

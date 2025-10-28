@@ -67,6 +67,9 @@ class Room:
     height: float = 2.7  # Высота потолка (метры)
     room_type: str = "living"  # Тип комнаты (living, bedroom, kitchen, bathroom)
     wall_thickness: float = 0.2  # Толщина стен комнаты (метры)
+    walls_visible: dict = field(default_factory=lambda: {
+        "top": True, "bottom": True, "left": True, "right": True
+    })  # Видимость стен (для автоматического удаления смежных)
     windows: List[Opening] = field(default_factory=list)
     doors: List[Opening] = field(default_factory=list)
     materials: dict = field(default_factory=dict)  # Материалы для стен, пола, потолка
@@ -142,6 +145,7 @@ class ApartmentModel:
                     "height": room.height,
                     "room_type": room.room_type,
                     "wall_thickness": room.wall_thickness,
+                    "walls_visible": room.walls_visible,
                     "windows": [
                         {
                             "type": w.opening_type.value,
@@ -206,6 +210,9 @@ class ApartmentModel:
                 height=room_data.get("height", 2.7),
                 room_type=room_data.get("room_type", "living"),
                 wall_thickness=room_data.get("wall_thickness", 0.2),
+                walls_visible=room_data.get("walls_visible", {
+                    "top": True, "bottom": True, "left": True, "right": True
+                }),
                 materials=room_data.get("materials", {})
             )
             

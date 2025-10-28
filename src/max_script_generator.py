@@ -7,7 +7,7 @@ FSA-3dsMaxAutomation - Генератор MAXScript
 
 # Глобальные переменные проекта
 PROJECT_NAME = "FSA-3dsMaxAutomation"
-VERSION = "V1.0.0 (2025.10.26)"
+VERSION = "V1.1.0 (2025.10.29)"
 DEVELOPER = "@FoksSegr"
 
 from apartment_model import ApartmentModel, Room, Wall, OpeningType
@@ -54,7 +54,9 @@ class MaxScriptGenerator:
         """Конвертировать метры в единицы 3ds Max"""
         # 3ds Max использует внутренние единицы, по умолчанию см
         # 1 метр = 100 см
-        return str(value * 100 * self.scale_factor)
+        # Округляем до 2 знаков после запятой (0.01 см = 0.1 мм точность)
+        result = round(value * 100 * self.scale_factor, 2)
+        return str(result)
     
     def generate_box(self, name: str, x: float, y: float, z: float, 
                      length: float, width: float, height: float) -> str:
@@ -86,54 +88,68 @@ class MaxScriptGenerator:
         """Генерация комнаты (пол + потолок + стены)"""
         self._add_line(f"-- Комната: {room.name}")
         
-        # Пол
+        # Используем толщину стен из модели комнаты
+        wall_thickness = room.wall_thickness
+        
+        # Пол (внутренняя площадь, без стен)
         floor_name = self._get_object_name("Floor")
-        self.generate_box(floor_name, room.x, room.y, 0, 
-                         room.length, room.width, 0.05)  # Толщина пола 5см
+        floor_x = room.x + wall_thickness
+        floor_y = room.y + wall_thickness
+        floor_length = room.length - 2 * wall_thickness
+        floor_width = room.width - 2 * wall_thickness
+        
+        self.generate_box(floor_name, floor_x, floor_y, 0, 
+                         floor_length, floor_width, 0.05)  # Толщина пола 5см
         self._add_line(f'{floor_name}.name = "Пол_{room.name}"')
         self._add_line("")
         
-        # Потолок
+        # Потолок (внутренняя площадь, без стен)
         ceiling_name = self._get_object_name("Ceiling")
-        self.generate_box(ceiling_name, room.x, room.y, room.height, 
-                         room.length, room.width, 0.05)  # Толщина потолка 5см
+        self.generate_box(ceiling_name, floor_x, floor_y, room.height, 
+                         floor_length, floor_width, 0.05)  # Толщина потолка 5см
         self._add_line(f'{ceiling_name}.name = "Потолок_{room.name}"')
         self._add_line("")
         
-        # Стены комнаты
-        wall_thickness = 0.2  # Толщина стены 20см
+        # Проверяем видимость стен из модели
+        walls_visible = getattr(room, 'walls_visible', {
+            "top": True, "bottom": True, "left": True, "right": True
+        })
         
-        # Стена 1 (нижняя)
-        self._add_line(f"-- Стена 1 (нижняя)")
-        wall1_name = self._get_object_name("Wall")
-        self.generate_box(wall1_name, room.x, room.y, 0,
-                         room.length, wall_thickness, room.height)
-        self._add_line(f'{wall1_name}.name = "Стена_1_{room.name}"')
-        self._add_line("")
+        # Стена 1 (нижняя, bottom) - только если видима
+        if walls_visible.get("bottom", True):
+            self._add_line(f"-- Стена (нижняя)")
+            wall1_name = self._get_object_name("Wall")
+            self.generate_box(wall1_name, room.x, room.y, 0,
+                             room.length, wall_thickness, room.height)
+            self._add_line(f'{wall1_name}.name = "Стена_Нижняя_{room.name}"')
+            self._add_line("")
         
-        # Стена 2 (верхняя)
-        self._add_line(f"-- Стена 2 (верхняя)")
-        wall2_name = self._get_object_name("Wall")
-        self.generate_box(wall2_name, room.x, room.y + room.width - wall_thickness, 0,
-                         room.length, wall_thickness, room.height)
-        self._add_line(f'{wall2_name}.name = "Стена_2_{room.name}"')
-        self._add_line("")
+        # Стена 2 (верхняя, top) - только если видима
+        if walls_visible.get("top", True):
+            self._add_line(f"-- Стена (верхняя)")
+            wall2_name = self._get_object_name("Wall")
+            self.generate_box(wall2_name, room.x, room.y + room.width - wall_thickness, 0,
+                             room.length, wall_thickness, room.height)
+            self._add_line(f'{wall2_name}.name = "Стена_Верхняя_{room.name}"')
+            self._add_line("")
         
-        # Стена 3 (левая)
-        self._add_line(f"-- Стена 3 (левая)")
-        wall3_name = self._get_object_name("Wall")
-        self.generate_box(wall3_name, room.x, room.y, 0,
-                         wall_thickness, room.width, room.height)
-        self._add_line(f'{wall3_name}.name = "Стена_3_{room.name}"')
-        self._add_line("")
+        # Стена 3 (левая, left) - только если видима
+        if walls_visible.get("left", True):
+            self._add_line(f"-- Стена (левая)")
+            wall3_name = self._get_object_name("Wall")
+            self.generate_box(wall3_name, room.x, room.y, 0,
+                             wall_thickness, room.width, room.height)
+            self._add_line(f'{wall3_name}.name = "Стена_Левая_{room.name}"')
+            self._add_line("")
         
-        # Стена 4 (правая)
-        self._add_line(f"-- Стена 4 (правая)")
-        wall4_name = self._get_object_name("Wall")
-        self.generate_box(wall4_name, room.x + room.length - wall_thickness, room.y, 0,
-                         wall_thickness, room.width, room.height)
-        self._add_line(f'{wall4_name}.name = "Стена_4_{room.name}"')
-        self._add_line("")
+        # Стена 4 (правая, right) - только если видима
+        if walls_visible.get("right", True):
+            self._add_line(f"-- Стена (правая)")
+            wall4_name = self._get_object_name("Wall")
+            self.generate_box(wall4_name, room.x + room.length - wall_thickness, room.y, 0,
+                             wall_thickness, room.width, room.height)
+            self._add_line(f'{wall4_name}.name = "Стена_Правая_{room.name}"')
+            self._add_line("")
     
     def generate_doors_and_windows(self, room: Room):
         """Генерация дверей и окон для комнаты"""
