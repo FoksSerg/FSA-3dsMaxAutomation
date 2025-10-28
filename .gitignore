@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# PyInstaller
+*.spec
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Проект
+window_settings.json
+tests/*.ms
+tests/*.json
+*.max
+
+# Автосохранения
+autosave/
+autosave_*.json
+
+# История коммитов
+History/
+
