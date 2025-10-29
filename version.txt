@@ -1,5 +1,5 @@
 FSA-3dsMaxAutomation
-Version: V1.1.0
+Version: V1.2.0
 Date: 2025.10.29
 Developer: @FoksSegr
 

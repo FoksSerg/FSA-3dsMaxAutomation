@@ -58,12 +58,16 @@ class Wall:
 
 @dataclass
 class Room:
-    """Комната в квартире"""
+    """Комната в квартире
+    
+    ВАЖНО: length и width - это ВНУТРЕННИЕ размеры комнаты (без учёта толщины стен)
+    Для получения внешних размеров используйте методы get_outer_length() и get_outer_width()
+    """
     name: str
-    x: float  # Координата левого нижнего угла
+    x: float  # Координата левого нижнего угла (внешняя граница)
     y: float
-    width: float  # Ширина комнаты (метры)
-    length: float  # Длина комнаты (метры)
+    width: float  # Ширина комнаты ВНУТРЕННЯЯ (метры, без стен)
+    length: float  # Длина комнаты ВНУТРЕННЯЯ (метры, без стен)
     height: float = 2.7  # Высота потолка (метры)
     room_type: str = "living"  # Тип комнаты (living, bedroom, kitchen, bathroom)
     wall_thickness: float = 0.2  # Толщина стен комнаты (метры)
@@ -73,6 +77,22 @@ class Room:
     windows: List[Opening] = field(default_factory=list)
     doors: List[Opening] = field(default_factory=list)
     materials: dict = field(default_factory=dict)  # Материалы для стен, пола, потолка
+    
+    def get_outer_length(self) -> float:
+        """Получить внешнюю длину комнаты (с учётом стен)"""
+        return self.length + 2 * self.wall_thickness
+    
+    def get_outer_width(self) -> float:
+        """Получить внешнюю ширину комнаты (с учётом стен)"""
+        return self.width + 2 * self.wall_thickness
+    
+    def get_inner_area(self) -> float:
+        """Получить внутреннюю площадь комнаты (без стен)"""
+        return self.length * self.width
+    
+    def get_outer_area(self) -> float:
+        """Получить внешнюю площадь комнаты (с учётом стен)"""
+        return self.get_outer_length() * self.get_outer_width()
     
     def add_window(self, width: float, height: float, position: float, name: str = ""):
         """Добавить окно"""

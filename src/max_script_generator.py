@@ -85,18 +85,24 @@ class MaxScriptGenerator:
         return name
     
     def generate_room(self, room: Room):
-        """Генерация комнаты (пол + потолок + стены)"""
+        """Генерация комнаты (пол + потолок + стены)
+        
+        ВАЖНО: room.length и room.width теперь ВНУТРЕННИЕ размеры (без стен)
+        """
         self._add_line(f"-- Комната: {room.name}")
         
         # Используем толщину стен из модели комнаты
         wall_thickness = room.wall_thickness
         
+        # ВНУТРЕННИЕ размеры = room.length, room.width
+        # ВНЕШНИЕ размеры = room.length + 2*wall_thickness, room.width + 2*wall_thickness
+        
         # Пол (внутренняя площадь, без стен)
         floor_name = self._get_object_name("Floor")
         floor_x = room.x + wall_thickness
         floor_y = room.y + wall_thickness
-        floor_length = room.length - 2 * wall_thickness
-        floor_width = room.width - 2 * wall_thickness
+        floor_length = room.length  # Уже внутренний размер
+        floor_width = room.width    # Уже внутренний размер
         
         self.generate_box(floor_name, floor_x, floor_y, 0, 
                          floor_length, floor_width, 0.05)  # Толщина пола 5см
@@ -115,12 +121,16 @@ class MaxScriptGenerator:
             "top": True, "bottom": True, "left": True, "right": True
         })
         
+        # Внешние размеры для расчёта позиций стен
+        outer_length = room.length + 2 * wall_thickness
+        outer_width = room.width + 2 * wall_thickness
+        
         # Стена 1 (нижняя, bottom) - только если видима
         if walls_visible.get("bottom", True):
             self._add_line(f"-- Стена (нижняя)")
             wall1_name = self._get_object_name("Wall")
             self.generate_box(wall1_name, room.x, room.y, 0,
-                             room.length, wall_thickness, room.height)
+                             outer_length, wall_thickness, room.height)
             self._add_line(f'{wall1_name}.name = "Стена_Нижняя_{room.name}"')
             self._add_line("")
         
@@ -128,8 +138,8 @@ class MaxScriptGenerator:
         if walls_visible.get("top", True):
             self._add_line(f"-- Стена (верхняя)")
             wall2_name = self._get_object_name("Wall")
-            self.generate_box(wall2_name, room.x, room.y + room.width - wall_thickness, 0,
-                             room.length, wall_thickness, room.height)
+            self.generate_box(wall2_name, room.x, room.y + outer_width - wall_thickness, 0,
+                             outer_length, wall_thickness, room.height)
             self._add_line(f'{wall2_name}.name = "Стена_Верхняя_{room.name}"')
             self._add_line("")
         
@@ -138,7 +148,7 @@ class MaxScriptGenerator:
             self._add_line(f"-- Стена (левая)")
             wall3_name = self._get_object_name("Wall")
             self.generate_box(wall3_name, room.x, room.y, 0,
-                             wall_thickness, room.width, room.height)
+                             wall_thickness, outer_width, room.height)
             self._add_line(f'{wall3_name}.name = "Стена_Левая_{room.name}"')
             self._add_line("")
         
@@ -146,8 +156,8 @@ class MaxScriptGenerator:
         if walls_visible.get("right", True):
             self._add_line(f"-- Стена (правая)")
             wall4_name = self._get_object_name("Wall")
-            self.generate_box(wall4_name, room.x + room.length - wall_thickness, room.y, 0,
-                             wall_thickness, room.width, room.height)
+            self.generate_box(wall4_name, room.x + outer_length - wall_thickness, room.y, 0,
+                             wall_thickness, outer_width, room.height)
             self._add_line(f'{wall4_name}.name = "Стена_Правая_{room.name}"')
             self._add_line("")
     
